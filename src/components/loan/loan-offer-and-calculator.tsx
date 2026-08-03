@@ -1,0 +1,601 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import type {
+  LoanProduct,
+  LoanDetails,
+  CheckLoanEligibilityOutput,
+  FeeRule,
+  PenaltyRule,
+  Tax,
+} from "@/lib/types";
+import { addDays, format, endOfDay } from "date-fns";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AlertCircle, ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { calculateTotalRepayable, calculateInclusiveTax } from "@/lib/loan-calculator";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../ui/collapsible";
+import { IFB } from "@/lib/ifb-terminology";
+
+interface LoanOfferAndCalculatorProps {
+  product: LoanProduct;
+  taxConfigs: Tax[];
+  isLoading: boolean;
+  eligibilityResult: CheckLoanEligibilityOutput | null;
+  onAccept: (
+    details: Omit<
+      LoanDetails,
+      "id" | "providerName" | "productName" | "payments"
+    >
+  ) => void;
+  providerColor?: string;
+  isSubmitting?: boolean;
+  isBnplOrder?: boolean;
+  bnplAmount?: number;
+}
+
+const formatCurrency = (amount: number) => {
+  if (amount === null || amount === undefined || isNaN(amount))
+    return "0.00 ETB";
+  return (
+    new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount) + " ETB"
+  );
+};
+
+const formatFee = (feeRule: FeeRule | undefined, suffix?: string): string => {
+  if (!feeRule || feeRule.value === "" || feeRule.value === null) return "N/A";
+  const numericValue = Number(feeRule.value);
+  if (isNaN(numericValue)) return "N/A";
+
+  if (feeRule.type === "percentage") {
+    return `${numericValue}%${suffix || ""}`;
+  }
+  return formatCurrency(numericValue);
+};
+
+const formatPenaltyRule = (rule: PenaltyRule): string => {
+  const value = rule.value === "" ? 0 : Number(rule.value);
+  let valueString = "";
+  let conditionString = "";
+
+  if (rule.type === "fixed") {
+    valueString = formatCurrency(value);
+  } else if (rule.type === "percentageOfPrincipal") {
+    valueString = `${value}% of financing amount`;
+  } else if (rule.type === "percentageOfCompound") {
+    valueString = `${value}% of outstanding balance`;
+  }
+
+  const fromDay = rule.fromDay === "" ? 1 : Number(rule.fromDay);
+  const toDay =
+    rule.toDay === "" || rule.toDay === null ? Infinity : Number(rule.toDay);
+
+  if (toDay === Infinity) {
+    conditionString = `from day ${fromDay} onwards after due date`;
+  } else {
+    conditionString = `from day ${fromDay} to day ${toDay} after due date`;
+  }
+
+  return `${valueString} ${conditionString}`;
+};
+
+export function LoanOfferAndCalculator({
+  product,
+  taxConfigs,
+  isLoading,
+  eligibilityResult,
+  onAccept,
+  providerColor = "hsl(var(--primary))",
+  isSubmitting = false,
+  isBnplOrder = false,
+  bnplAmount,
+}: LoanOfferAndCalculatorProps) {
+  const [loanAmount, setLoanAmount] = useState<number | string>("");
+  const [amountError, setAmountError] = useState("");
+  const [isPenaltyDetailsOpen, setIsPenaltyDetailsOpen] = useState(false);
+  const [isInstallmentsOpen, setIsInstallmentsOpen] = useState(false);
+  const [calculationResult, setCalculationResult] = useState<any>(null);
+
+  const { suggestedLoanAmountMin = 0, suggestedLoanAmountMax = 0 } =
+    eligibilityResult || {};
+
+  // If product.maxLoan is not configured (0 or negative), treat it as no cap and rely on suggestedLoanAmountMax
+  const effectiveProductMax =
+    typeof product.maxLoan === "number" && product.maxLoan > 0
+      ? product.maxLoan
+      : Infinity;
+  const minLoan = Math.max(product.minLoan ?? 0, suggestedLoanAmountMin);
+  const maxLoan = Math.min(effectiveProductMax, suggestedLoanAmountMax);
+
+  useEffect(() => {
+    if (isBnplOrder && bnplAmount && bnplAmount > 0) {
+      setLoanAmount(bnplAmount);
+    } else {
+      const initialAmount = Math.min(product.availableLimit ?? maxLoan, maxLoan);
+      setLoanAmount(initialAmount);
+    }
+  }, [product.id, product.availableLimit, maxLoan, isBnplOrder, bnplAmount]);
+
+  useEffect(() => {
+    const calculate = () => {
+      const numericLoanAmount =
+        typeof loanAmount === "string" ? parseFloat(loanAmount) : loanAmount;
+      if (
+        !eligibilityResult?.isEligible ||
+        isNaN(numericLoanAmount) ||
+        numericLoanAmount <= 0
+      ) {
+        setCalculationResult(null);
+        return;
+      }
+
+      const disbursedDate = new Date();
+      const duration = product.duration ?? 30;
+      const dueDate =
+        duration === 0
+          ? endOfDay(disbursedDate)
+          : addDays(disbursedDate, duration);
+
+      let serviceFee = 0;
+      if (
+        product.serviceFeeEnabled &&
+        product.serviceFee &&
+        product.serviceFee.value
+      ) {
+        const feeValue =
+          typeof product.serviceFee.value === "string"
+            ? parseFloat(product.serviceFee.value)
+            : product.serviceFee.value || 0;
+        serviceFee =
+          product.serviceFee.type === "fixed"
+            ? feeValue
+            : numericLoanAmount * (feeValue / 100);
+      }
+
+      const tempLoan: LoanDetails = {
+        id: "temp",
+        loanAmount: numericLoanAmount,
+        serviceFee: serviceFee,
+        disbursedDate,
+        dueDate,
+        repaymentStatus: "Unpaid",
+        payments: [],
+        productName: product.name,
+        providerName: "",
+        repaidAmount: 0,
+        penaltyAmount: 0,
+        product: product,
+      };
+
+      const result = calculateTotalRepayable(
+        tempLoan,
+        product,
+        taxConfigs,
+        dueDate
+      );
+
+      const inclusiveTax = calculateInclusiveTax(numericLoanAmount, taxConfigs);
+      const inclusiveTaxItems = taxConfigs
+        .filter((t) => t.isInclusive && t.rate > 0 && (!t.status || t.status === "ACTIVE"))
+        .map((t) => ({
+          name: t.name || "Inclusive Tax",
+          amount: Math.round(numericLoanAmount * (t.rate / 100) * 100) / 100,
+        }));
+
+      // Calculate installments if applicable
+      const installmentsCount = product.installments || 1;
+      const installments = [];
+      if (installmentsCount > 1) {
+        const interval = product.repaymentIntervalDays || (duration > 0 ? Math.floor(duration / installmentsCount) : 0);
+        
+        let remainingPrincipal = numericLoanAmount;
+        let remainingServiceFee = result.serviceFee;
+        let remainingTax = result.tax;
+
+        for (let i = 1; i <= installmentsCount; i++) {
+          const isLast = i === installmentsCount;
+          
+          const instPrincipal = isLast ? remainingPrincipal : Math.round((numericLoanAmount / installmentsCount) * 100) / 100;
+          const instServiceFee = isLast ? remainingServiceFee : Math.round((result.serviceFee / installmentsCount) * 100) / 100;
+          const instTax = isLast ? remainingTax : Math.round((result.tax / installmentsCount) * 100) / 100;
+          
+          const instTotal = instPrincipal + instServiceFee + instTax;
+          // If interval is 0, all installments have same due date (unlikely but safe)
+          const instDueDate = interval > 0 ? addDays(disbursedDate, interval * i) : dueDate;
+          
+          installments.push({
+            number: i,
+            dueDate: instDueDate,
+            principal: instPrincipal,
+            serviceFee: instServiceFee,
+            tax: instTax,
+            total: instTotal
+          });
+          
+          remainingPrincipal -= instPrincipal;
+          remainingServiceFee -= instServiceFee;
+          remainingTax -= instTax;
+        }
+      }
+
+      setCalculationResult({
+        ...result,
+        disbursedDate,
+        dueDate,
+        penaltyAmount: 0,
+        inclusiveTax,
+        inclusiveTaxItems,
+        netDisbursedAmount: numericLoanAmount - inclusiveTax,
+        installments,
+      });
+    };
+
+    calculate();
+  }, [loanAmount, eligibilityResult, product, taxConfigs]);
+
+  const validateAmount = (amount: number | string) => {
+    const numericAmount =
+      typeof amount === "string" ? parseFloat(amount) : amount;
+    if (
+      isNaN(numericAmount) ||
+      numericAmount > maxLoan ||
+      numericAmount < minLoan
+    ) {
+      setAmountError(
+        `Please enter an amount between ${formatCurrency(
+          minLoan
+        )} and ${formatCurrency(maxLoan)}.`
+      );
+      return false;
+    }
+    setAmountError("");
+    return true;
+  };
+
+  const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    if (value === "") {
+      setLoanAmount("");
+      setAmountError(
+        `Please enter an amount between ${formatCurrency(
+          minLoan
+        )} and ${formatCurrency(maxLoan)}.`
+      );
+    } else {
+      setLoanAmount(value);
+      validateAmount(value);
+    }
+  };
+
+  const handleAccept = () => {
+    const numericLoanAmount =
+      typeof loanAmount === "string" ? parseFloat(loanAmount) : loanAmount;
+    if (calculationResult && !isNaN(numericLoanAmount)) {
+      if (!validateAmount(numericLoanAmount)) {
+        return;
+      }
+      onAccept({
+        loanAmount: numericLoanAmount,
+        repaymentStatus: "Unpaid",
+        repaidAmount: 0,
+        ...calculationResult,
+      });
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-8 w-3/4" />
+            <Skeleton className="h-4 w-1/2" />
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <Skeleton className="h-10 w-full" />
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-1/4" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Skeleton className="h-10 w-32" />
+          </CardFooter>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!eligibilityResult) {
+    return null; // Or some other placeholder
+  }
+
+  if (!eligibilityResult.isEligible) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Not eligible for financing</AlertTitle>
+          <AlertDescription>
+            {eligibilityResult.reason ||
+              "We're sorry, but you are not eligible for this financing product at this time."}
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <Card className="shadow-lg">
+        <CardHeader className="text-center">
+          <CardTitle className="text-2xl font-bold font-headline">
+            {product.name}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-4">
+            <Label htmlFor="loanAmount" className="text-sm font-medium">
+              {isBnplOrder && bnplAmount ? 'Order amount' : 'Enter your desired financing amount'}
+            </Label>
+            <Input
+              id="loanAmount"
+              type="number"
+              value={loanAmount}
+              onChange={handleAmountChange}
+              readOnly={!!(isBnplOrder && bnplAmount)}
+              className={cn(
+                "w-full text-xl font-bold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
+                amountError ? "border-destructive ring-destructive ring-2" : "",
+                isBnplOrder && bnplAmount ? "bg-gray-50 cursor-not-allowed" : ""
+              )}
+              min={minLoan}
+              max={maxLoan}
+              style={
+                {
+                  "--ring": amountError
+                    ? "hsl(var(--destructive))"
+                    : providerColor,
+                } as React.CSSProperties
+              }
+            />
+            {amountError ? (
+              <p className="text-sm text-destructive">{amountError}</p>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center">
+                {IFB.financingLimit}: {formatCurrency(minLoan ?? 0)} -{" "}
+                {formatCurrency(maxLoan ?? 0)}
+              </p>
+            )}
+          </div>
+
+          {calculationResult && (
+            <div className="space-y-2">
+              <div className="space-y-4 text-sm bg-secondary p-4 rounded-lg">
+                {Number(product.serviceFee?.value) > 0 && (
+                  <div className="flex justify-between items-center">
+                    <div className="font-medium">{IFB.administrationFee}</div>
+                    <div className="text-right">
+                      {formatFee(product.serviceFee)}
+                    </div>
+                  </div>
+                )}
+
+                {Number(product.dailyFee?.value) > 0 && (
+                  <div className="flex justify-between items-center">
+                    <div className="font-medium">{IFB.profitMargin}</div>
+                    <div className="text-right">
+                      {formatFee(product.dailyFee)}
+                    </div>
+                  </div>
+                )}
+
+                {calculationResult.tax > 0 && (
+                  <div className="flex justify-between items-center">
+                    <div className="font-medium">Tax</div>
+                    <div className="text-right">
+                      {formatCurrency(calculationResult.tax)}
+                    </div>
+                  </div>
+                )}
+
+                {calculationResult.inclusiveTax > 0 && (
+                  calculationResult.inclusiveTaxItems?.length > 0
+                    ? calculationResult.inclusiveTaxItems.map((item: { name: string; amount: number }, idx: number) => (
+                        <div key={idx} className="flex justify-between items-center text-accent-foreground bg-accent/15 -mx-4 px-4 py-2">
+                          <div className="font-medium text-xs">
+                            {item.name} <span className="text-muted-foreground">(Deducted from Principal)</span>
+                          </div>
+                          <div className="text-right font-semibold text-xs">
+                            - {formatCurrency(item.amount)}
+                          </div>
+                        </div>
+                      ))
+                    : (
+                        <div className="flex justify-between items-center text-accent-foreground bg-accent/15 -mx-4 px-4 py-2">
+                          <div className="font-medium text-xs">
+                            Inclusive Tax <span className="text-muted-foreground">(Deducted from Principal)</span>
+                          </div>
+                          <div className="text-right font-semibold text-xs">
+                            - {formatCurrency(calculationResult.inclusiveTax)}
+                          </div>
+                        </div>
+                      )
+                )}
+
+                {calculationResult.inclusiveTax > 0 && (
+                  <div className="flex justify-between items-center">
+                    <div className="font-medium text-xs">
+                      Net amount released
+                    </div>
+                    <div className="text-right font-semibold text-xs">
+                      {formatCurrency(calculationResult.netDisbursedAmount)}
+                    </div>
+                  </div>
+                )}
+
+                <Collapsible
+                  open={isPenaltyDetailsOpen}
+                  onOpenChange={setIsPenaltyDetailsOpen}
+                >
+                  {product.penaltyRules && product.penaltyRules.length > 0 && (
+                    <CollapsibleTrigger asChild>
+                      <button
+                        type="button"
+                        className={cn(
+                          "font-medium w-full flex justify-between items-center",
+                          product.penaltyRules &&
+                            product.penaltyRules.length > 0 &&
+                            "text-destructive"
+                        )}
+                      >
+                        <span className="flex items-center">
+                          {IFB.lateCharge} rules
+                          <ChevronDown
+                            className={cn(
+                              "h-4 w-4 ml-1 transition-transform",
+                              isPenaltyDetailsOpen && "rotate-180"
+                            )}
+                          />
+                        </span>
+                      </button>
+                    </CollapsibleTrigger>
+                  )}
+                  <CollapsibleContent>
+                    <div className="mt-2 space-y-1 text-xs text-muted-foreground/80 pl-4">
+                      {(product.penaltyRules || []).map((rule) => (
+                        <p key={rule.id}>- {formatPenaltyRule(rule)}</p>
+                      ))}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+
+                {calculationResult.installments?.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-muted-foreground/20">
+                    <Collapsible
+                      open={isInstallmentsOpen}
+                      onOpenChange={setIsInstallmentsOpen}
+                    >
+                      <CollapsibleTrigger asChild>
+                        <button
+                          type="button"
+                          className="font-medium w-full flex justify-between items-center"
+                        >
+                          <span className="flex items-center text-sm font-semibold">
+                            Installment Schedule
+                            <ChevronDown
+                              className={cn(
+                                "h-4 w-4 ml-1 transition-transform",
+                                isInstallmentsOpen && "rotate-180"
+                              )}
+                            />
+                          </span>
+                          <span className="text-xs text-muted-foreground font-normal">
+                            {calculationResult.installments.length} installments
+                          </span>
+                        </button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <div className="space-y-2 mt-3">
+                          {calculationResult.installments.map((inst: any) => (
+                            <div
+                              key={inst.number}
+                              className="bg-background/50 p-3 rounded-md border border-muted-foreground/10"
+                            >
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="font-medium text-xs">
+                                  Installment {inst.number}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  {format(inst.dueDate, "MMM dd, yyyy")}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">
+                                    {IFB.financingAmount}:
+                                  </span>
+                                  <span>{formatCurrency(inst.principal)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">
+                                    {IFB.administrationFee}:
+                                  </span>
+                                  <span>{formatCurrency(inst.serviceFee)}</span>
+                                </div>
+                                {inst.tax > 0 && (
+                                  <div className="flex justify-between">
+                                    <span className="text-muted-foreground">
+                                      Tax:
+                                    </span>
+                                    <span>{formatCurrency(inst.tax)}</span>
+                                  </div>
+                                )}
+                                <div className="flex justify-between col-span-2 pt-1 border-t border-muted-foreground/5 font-bold text-xs mt-1">
+                                  <span>Per installment pay:</span>
+                                  <span style={{ color: providerColor }}>
+                                    {formatCurrency(inst.total)}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-between items-center p-4 rounded-lg border">
+                <div>
+                  <span className="text-base font-semibold">
+                    Total Repayable Amount
+                  </span>
+                  <p className="text-xs text-muted-foreground">
+                    on {format(calculationResult.dueDate, "PPP")}
+                  </p>
+                </div>
+                <span
+                  className="text-2xl font-bold"
+                  style={{ color: providerColor }}
+                >
+                  {formatCurrency(calculationResult.total)}
+                </span>
+              </div>
+            </div>
+          )}
+        </CardContent>
+        <CardFooter>
+          <Button
+            size="lg"
+            className="w-full text-white"
+            onClick={handleAccept}
+            disabled={!!amountError || isSubmitting}
+            style={{ backgroundColor: providerColor }}
+          >
+            {isSubmitting ? "Processing..." : isBnplOrder ? "Accept and place order" : "Accept and release financing"}
+          </Button>
+        </CardFooter>
+      </Card>
+    </div>
+  );
+}

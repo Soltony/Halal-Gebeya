@@ -13,6 +13,7 @@ import { normalizeDiscountEndDate, normalizeDiscountStartDate } from "@/lib/disc
 import { calculateTotalRepayable } from "@/lib/loan-calculator";
 import { startOfDay, isBefore, isEqual } from "date-fns";
 import { getAsOfDate } from "@/lib/date-utils";
+import { syncCbsDeletionForBorrower } from "@/actions/cbs-npl";
 
 const approvalSchema = z.object({
   changeId: z.string(),
@@ -2023,6 +2024,13 @@ async function applyChange(
           },
           ipAddress,
           userAgent,
+        });
+
+        // Stop CBS NPL monitoring once this borrower has nothing unpaid left.
+        // Best-effort and self-gating: it no-ops while unpaid loans remain.
+        void syncCbsDeletionForBorrower(borrowerId, {
+          source: "MANUAL",
+          actorId: actorId || undefined,
         });
       }
       break;

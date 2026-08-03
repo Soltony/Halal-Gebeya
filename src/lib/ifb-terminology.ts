@@ -50,6 +50,7 @@ export const IFB = {
 
   npf: 'NPF',
   npfCustomers: 'NPF customers',
+  npfCollection: 'NPF collection',
 
   leviesTax: 'Levies & VAT',
   financingReleaseControl: 'Financing release control',

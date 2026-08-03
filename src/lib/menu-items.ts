@@ -5,6 +5,7 @@ import {
   ShieldCheck,
   FileCog,
   BadgeAlert,
+  Banknote,
   Landmark,
   Download,
   FolderArchive,
@@ -92,6 +93,13 @@ export const allMenuItems: MenuItem[] = [
     icon: BadgeAlert,
     roles: ['Super Admin', 'Loan Manager', 'Auditor'],
     permissionKey: 'npl',
+  },
+  {
+    path: '/admin/npl-collection',
+    label: IFB.npfCollection,
+    icon: Banknote,
+    roles: ['Super Admin', 'Loan Manager', 'Auditor'],
+    permissionKey: 'npl-collection',
   },
   {
     path: '/admin/sms-management',

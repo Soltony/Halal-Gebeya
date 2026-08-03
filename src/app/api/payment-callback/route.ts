@@ -8,6 +8,7 @@ import { startOfDay, isBefore, isEqual } from "date-fns";
 import { getAsOfDate } from "@/lib/date-utils";
 import { ensureInstallmentRollover } from "@/lib/installment-rollover";
 import { createAuditLog } from "@/lib/audit-log";
+import { syncCbsDeletionForBorrower } from "@/actions/cbs-npl";
 
 // Local alias for repayment behavior values used in the code
 type RepaymentBehavior = "EARLY" | "ON_TIME" | "LATE";
@@ -1092,6 +1093,10 @@ export async function POST(request: NextRequest) {
 
       return finalLoan;
     });
+
+    // Stop CBS NPL monitoring once this borrower has nothing unpaid left.
+    // Best-effort and self-gating: it no-ops while unpaid loans remain.
+    void syncCbsDeletionForBorrower(borrowerId, { source: "MANUAL" });
 
     return NextResponse.json(
       { message: "Payment confirmed and updated." },

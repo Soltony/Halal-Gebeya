@@ -10,6 +10,7 @@ import sendSms from '@/lib/sms';
 import { MiniAppAuthError, requireMiniAppAuthContext } from '@/lib/miniapp-auth';
 import { getAsOfDate } from '@/lib/date-utils';
 import { ensureInstallmentRollover } from '@/lib/installment-rollover';
+import { SETTLED_STATUSES } from '@/lib/installment-status';
 
 const paymentSchema = z.object({
     loanId: z.string(),
@@ -273,7 +274,7 @@ export async function POST(req: NextRequest) {
                         where: {
                             loanId,
                             installmentNumber: { gt: installment.installmentNumber },
-                            status: { notIn: ['Merged', 'Paid'] },
+                            status: { notIn: SETTLED_STATUSES },
                             amount: { gt: 0 },
                         },
                         orderBy: { installmentNumber: 'asc' },

@@ -10,6 +10,7 @@ import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { BRAND_PRIMARY } from '@/lib/brand-colors';
 import { IFB } from '@/lib/ifb-terminology';
+import { isPaidStatus } from '@/lib/installment-status';
 import { ChevronDown } from 'lucide-react';
 import {
   Collapsible,
@@ -152,14 +153,14 @@ export function LoanDetailClient({ loanDetails }: LoanDetailClientProps) {
                                                                     <span className="font-bold text-sm">
                                                                         Installment {inst.installmentNumber}
                                                                     </span>
-                                                                    <Badge 
-                                                                        variant={inst.status === 'Paid' ? 'default' : (isPartial ? 'secondary' : 'destructive')} 
+                                                                    <Badge
+                                                                        variant={isPaidStatus(inst.status) ? 'default' : (isPartial ? 'secondary' : 'destructive')}
                                                                         className={cn(
                                                                             "text-[10px] px-1.5 py-0",
-                                                                            inst.status === 'Paid' ? "bg-green-600 text-white" : (isPartial ? "bg-amber-500 text-white" : "bg-red-500 text-white")
+                                                                            isPaidStatus(inst.status) ? "bg-green-600 text-white" : (isPartial ? "bg-amber-500 text-white" : "bg-red-500 text-white")
                                                                         )}
                                                                     >
-                                                                        {inst.status === 'Paid' ? 'Paid' : (isPartial ? 'Partial' : 'Unpaid')}
+                                                                        {isPaidStatus(inst.status) ? 'Paid' : (isPartial ? 'Partial' : 'Unpaid')}
                                                                     </Badge>
                                                                 </div>
                                                                 <span className="text-xs font-medium text-muted-foreground">

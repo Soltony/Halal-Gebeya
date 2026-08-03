@@ -7,6 +7,12 @@ import {
 import { startOfDay, isBefore, isEqual } from "date-fns";
 import { getAsOfDate } from "@/lib/date-utils";
 import { ensureInstallmentRollover } from "@/lib/installment-rollover";
+import {
+  INSTALLMENT_STATUS,
+  SETTLED_STATUSES,
+  isMergedStatus,
+  isSettledStatus,
+} from "@/lib/installment-status";
 import { createAuditLog } from "@/lib/audit-log";
 import { syncCbsDeletionForBorrower } from "@/actions/cbs-npl";
 
@@ -344,7 +350,7 @@ export async function POST(request: NextRequest) {
           orderBy: { installmentNumber: "asc" },
         });
         const activeInstallment = refreshedInstallments.find(
-          (i) => i.isActive && i.status !== "PAID"
+          (i) => i.isActive && !isSettledStatus(i.status)
         );
         if (!activeInstallment) {
           throw new Error("No active installment found for this loan.");
@@ -681,7 +687,9 @@ export async function POST(request: NextRequest) {
           data: {
             paidAmount: newPaidAmount,
             paidAt: paymentDate,
-            status: isInstallmentFullyPaid ? "Paid" : "Pending",
+            status: isInstallmentFullyPaid
+              ? INSTALLMENT_STATUS.Paid
+              : INSTALLMENT_STATUS.Pending,
             penaltyAmount: penaltyForInstallment,
             isActive: !isInstallmentFullyPaid,
           },
@@ -694,11 +702,13 @@ export async function POST(request: NextRequest) {
 
         if (isInstallmentFullyPaid) {
           // Mark all merged installments (that were merged INTO this active installment) as Paid
-          // These are installments with status 'MERGED' and installmentNumber > activeInstallment.installmentNumber
-          // that had their amount rolled into the active installment
+          // These are installments with a Merged status and installmentNumber > activeInstallment.installmentNumber
+          // that had their amount rolled into the active installment.
+          // Status is matched case-insensitively: the DB holds a mix of 'Merged'
+          // and legacy 'MERGED', and a case-sensitive compare silently skipped rows.
           const mergedInstallments = refreshedInstallments.filter(
             (i) =>
-              i.status === "MERGED" &&
+              isMergedStatus(i.status) &&
               i.installmentNumber > activeInstallment.installmentNumber
           );
 
@@ -707,7 +717,7 @@ export async function POST(request: NextRequest) {
               mergedInstallments.map((merged) =>
                 tx.loanInstallment.update({
                   where: { id: merged.id },
-                  data: { status: "PAID", paidAt: paymentDate },
+                  data: { status: INSTALLMENT_STATUS.Paid, paidAt: paymentDate },
                 })
               )
             );
@@ -717,7 +727,7 @@ export async function POST(request: NextRequest) {
             where: {
               loanId,
               installmentNumber: { gt: activeInstallment.installmentNumber },
-              status: { notIn: ["MERGED", "PAID"] },
+              status: { notIn: SETTLED_STATUSES },
               amount: { gt: 0 },
             },
             orderBy: { installmentNumber: "asc" },

@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import { calculateTotalRepayableDetailed } from '@/lib/loan-calculator';
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from '../ui/tooltip';
 import { calculateInstallmentPenalty } from '@/lib/installment-penalty';
+import { isMergedStatus } from '@/lib/installment-status';
 import { BRAND_PRIMARY } from '@/lib/brand-colors';
 import { IFB } from '@/lib/ifb-terminology';
 
@@ -102,7 +103,7 @@ export function ProductCard({
     
     const activeInstallment = activeLoan && Array.isArray((activeLoan as any).installments) ? (activeLoan as any).installments.find((i: any) => i.isActive) : undefined;
     const mergedNextInstallment = activeLoan && activeInstallment && Array.isArray((activeLoan as any).installments)
-        ? (activeLoan as any).installments.find((i: any) => i && i.status === 'Merged' && i.installmentNumber === activeInstallment.installmentNumber + 1)
+        ? (activeLoan as any).installments.find((i: any) => i && isMergedStatus(i.status) && i.installmentNumber === activeInstallment.installmentNumber + 1)
         : undefined;
     const isOverdue = activeInstallment ? asOfDate > new Date(activeInstallment.dueDate) : (activeLoan ? asOfDate > new Date(activeLoan.dueDate) : false);
 

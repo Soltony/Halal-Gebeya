@@ -10,6 +10,7 @@ import { differenceInDays } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { calculateTotalRepayableDetailed } from '@/lib/loan-calculator';
 import { calculateInstallmentPenalty } from '@/lib/installment-penalty';
+import { isMergedStatus } from '@/lib/installment-status';
 import { useToast } from '@/hooks/use-toast';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert';
 import { AlertCircle } from 'lucide-react';
@@ -147,7 +148,7 @@ export function RepaymentDialog({ isOpen, onClose, onConfirm, loan, totalBalance
         const installments = Array.isArray((loan as any)?.installments) ? (loan as any).installments : [];
         if (!activeInstallment) return undefined;
         return installments.find((i: any) =>
-            i && i.status === 'Merged' && i.installmentNumber === activeInstallment.installmentNumber + 1
+            i && isMergedStatus(i.status) && i.installmentNumber === activeInstallment.installmentNumber + 1
         );
     }, [loan, activeInstallment]);
 

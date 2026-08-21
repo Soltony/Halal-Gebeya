@@ -43,7 +43,7 @@ export function PaymentApprovalsClient({
   pendingChanges: PendingPaymentApproval[];
   currentUser: User;
 }) {
-  useRequirePermission("pending-payment-approvals");
+  useRequirePermission(["pending-payment-approvals", "approvals"]);
   const [changes, setChanges] = useState(initialChanges);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");

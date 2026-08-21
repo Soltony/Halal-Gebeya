@@ -2042,7 +2042,16 @@ async function applyChange(
 
 export async function POST(req: NextRequest) {
   const user = await getUserFromSession();
-  if (!user || (!user.permissions?.["approvals"]?.update && !user.permissions?.["reversal-approval"]?.update && !user.permissions?.["merchants-approvals"]?.update && !user.permissions?.["pending-payment-approvals"]?.update)) {
+  // General approvers can process any pending change. Roles that only hold the
+  // settlement-approvals module are limited to PaymentMarkSuccessful changes,
+  // which is enforced once the change has been loaded below.
+  const canApproveAnyChange =
+    !!user?.permissions?.["approvals"]?.update ||
+    !!user?.permissions?.["reversal-approval"]?.update ||
+    !!user?.permissions?.["merchants-approvals"]?.update;
+  const canApprovePaymentChanges =
+    !!user?.permissions?.["pending-payment-approvals"]?.update;
+  if (!user || (!canApproveAnyChange && !canApprovePaymentChanges)) {
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
 
@@ -2062,6 +2071,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "Change request not found." },
         { status: 404 }
+      );
+    }
+
+    if (!canApproveAnyChange && change.entityType !== "PaymentMarkSuccessful") {
+      return NextResponse.json(
+        { error: "Not authorized to process this type of change." },
+        { status: 403 }
       );
     }
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { decryptJwt } from '@/lib/session';
-import { allMenuItems } from './lib/menu-items';
+import { allMenuItems, menuItemModuleKey, getModulesForPath } from './lib/menu-items';
 import type { Permissions } from '@/lib/types';
 
 function findLongestMatchingMenuItem(path: string) {
@@ -66,6 +66,11 @@ const protectedAdminRoutes = [
   '/api/merchants', '/api/branches', '/api/inventory'
 ];
 const publicRoutes = ['/admin/login', '/loan/connect', '/admin/change-password'];
+
+// Pages any authenticated admin may open regardless of module permissions.
+// This is where the permission guards themselves redirect, so gating it makes a
+// denied page bounce to an unrelated module instead of showing "Unauthorized".
+const permissionExemptAdminRoutes = ['/admin/forbidden'];
 
 const protectedMiniAppRoutes = ['/loan', '/dashboard', '/history', '/bnpl'];
 const publicMiniAppRoutes = ['/loan/connect'];
@@ -273,6 +278,12 @@ export default async function middleware(req: NextRequest) {
       );
     }
 
+    // Authenticated, password is current: let the shared "no permission" pages
+    // through without running module checks against them.
+    if (permissionExemptAdminRoutes.includes(path)) {
+      return withSecurityHeaders(response, cspHeader, nonce);
+    }
+
     let permissions: Permissions = session.permissions || {};
 
     // Branch-scoped users must not access the Districts page or its APIs
@@ -294,8 +305,10 @@ export default async function middleware(req: NextRequest) {
     const PERMISSION_MAP: Record<string, string> = {};
     const ORDERED_ADMIN_PAGES: string[] = [];
     for (const item of allMenuItems) {
-      const moduleKey = item.label.toLowerCase().replace(/\s+/g, '-');
-      PERMISSION_MAP[item.path] = moduleKey;
+      // Must honour `permissionKey` - the label is only a fallback. Deriving the
+      // key from a display label alone invents a module nobody is granted, and
+      // the denial below then bounces the user to an unrelated page.
+      PERMISSION_MAP[item.path] = menuItemModuleKey(item);
       ORDERED_ADMIN_PAGES.push(item.path);
     }
 
@@ -325,7 +338,13 @@ export default async function middleware(req: NextRequest) {
         }
       }
 
-      if (requiredPermission && !userPermissions.has(requiredPermission.toLowerCase())) {
+      // A page reachable through several modules is allowed if the user holds any
+      // of them - the page guard and its API routes accept the same set.
+      const allowedModules = requiredPermission
+        ? getModulesForPath(longestMatch || path, requiredPermission)
+        : [];
+
+      if (requiredPermission && !allowedModules.some(m => userPermissions.has(m))) {
         const firstAllowedPage = ORDERED_ADMIN_PAGES.find(pagePath => {
           const perm = PERMISSION_MAP[pagePath];
           return perm && userPermissions.has(perm.toLowerCase());
@@ -379,8 +398,10 @@ export default async function middleware(req: NextRequest) {
 
     // menu permission read check
     if (currentRouteConfig) {
-      const moduleName = currentRouteConfig.permissionKey || currentRouteConfig.label.toLowerCase().replace(/\s+/g, '-');
-      const hasPermission = !!permissions[moduleName]?.read;
+      const moduleName = menuItemModuleKey(currentRouteConfig);
+      const hasPermission = getModulesForPath(path, moduleName).some(
+        m => !!permissions[m]?.read
+      );
 
       if (!hasPermission) {
         if (path.startsWith('/api/')) {

@@ -198,3 +198,33 @@ export const allMenuItems: MenuItem[] = [
     roles: ['Super Admin', 'Auditor'],
   },
 ];
+
+// Module key a menu item maps to (kept in one place - several call sites used to
+// re-derive this from the label independently, and the ones that forgot about
+// `permissionKey` bounced users off pages they were allowed to open).
+export function menuItemModuleKey(item: Pick<MenuItem, 'label' | 'permissionKey'>) {
+  return (item.permissionKey || item.label.toLowerCase().replace(/\s+/g, '-')).toLowerCase();
+}
+
+// Some pages are reachable through more than one module. The page guards and the
+// API routes accept any module in the list, so every other access check has to
+// accept the same set - otherwise a user the page would let in gets bounced and
+// lands on an unrelated module (the first page they *do* have access to).
+export const ROUTE_MODULE_ALIASES: Record<string, string[]> = {
+  '/admin/pending-payment-approvals': ['pending-payment-approvals', 'approvals'],
+  '/admin/pending-payments': ['pending-payments', 'pending-payment-approvals', 'approvals'],
+};
+
+// Every module key that may grant access to `path`.
+export function getModulesForPath(path: string, menuModuleKey?: string): string[] {
+  const keys = new Set<string>();
+  if (menuModuleKey) keys.add(menuModuleKey.toLowerCase());
+
+  for (const prefix of Object.keys(ROUTE_MODULE_ALIASES)) {
+    if (path === prefix || path.startsWith(prefix + '/')) {
+      ROUTE_MODULE_ALIASES[prefix].forEach((m) => keys.add(m.toLowerCase()));
+    }
+  }
+
+  return Array.from(keys);
+}

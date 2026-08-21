@@ -23,7 +23,7 @@ const ENTITY_TO_MODULE: Record<string, string[]> = {
   disbursementcancel: ['approvals', 'reversal-approval'],
   loanreversal: ['reversals', 'reversal-approval'],
   loancancel: ['reversals', 'reversal-approval'],
-  paymentmarksuccessful: ['pending-payments', 'pending-payment-approvals'],
+  paymentmarksuccessful: ['pending-payments', 'pending-payment-approvals', 'approvals'],
   eligibilitylist: ['settings'],
   dataprovisioningupload: ['settings', 'scoring-engine'],
   termsandconditions: ['settings'],

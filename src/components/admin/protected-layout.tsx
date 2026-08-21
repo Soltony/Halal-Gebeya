@@ -48,7 +48,7 @@ import Image from 'next/image';
 import { useAuth } from '@/hooks/use-auth';
 import type { LoanProvider } from '@/lib/types';
 import { cn } from '@/lib/utils';
-import { allMenuItems } from '@/lib/menu-items';
+import { allMenuItems, menuItemModuleKey, getModulesForPath } from '@/lib/menu-items';
 interface ProtectedLayoutProps {
   children: React.ReactNode;
   providers: LoanProvider[];
@@ -109,9 +109,13 @@ export function ProtectedLayout({ children, providers }: ProtectedLayoutProps) {
     if (!currentUser || !currentUser.permissions) return false;
     const current = currentMenuItem;
     if (!current) return true; // allow non-admin menu routes (handled elsewhere)
-    const moduleName = current.permissionKey || current.label.toLowerCase().replace(/\s+/g, '-');
-    return !!currentUser.permissions[moduleName]?.read;
-  }, [currentUser, currentMenuItem]);
+    // Pages reachable through more than one module stay open to any of them, so
+    // this check matches the middleware and the page's own guard.
+    const moduleName = menuItemModuleKey(current);
+    return getModulesForPath(pathname, moduleName).some(
+      (m) => !!currentUser.permissions?.[m]?.read
+    );
+  }, [currentUser, currentMenuItem, pathname]);
 
   const handleLogout = async () => {
     await logout();

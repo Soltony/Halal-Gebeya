@@ -911,11 +911,11 @@ export function ReportsClient({ providers }: { providers: LoanProvider[] }) {
           "Product Type": r.productType,
           [IFB.excelColCustomer]: r.borrowerId,
           "Financing released": r.principalDisbursed,
-          "Outstanding financing": r.principalOutstanding,
-          "Outstanding profit": r.interestOutstanding,
-          "Outstanding administration fee": r.serviceFeeOutstanding,
-          "Outstanding late charge": r.penaltyOutstanding,
-          "Total Outstanding": r.totalOutstanding,
+          "Financing amount paid": r.principalPaid,
+          "Daily fee paid": r.interestPaid,
+          "Commission paid": r.serviceFeePaid,
+          "Late charge paid": r.penaltyPaid,
+          "Total settled": r.totalPaid,
           Status: r.status,
         }));
         const ws = wb.addWorksheet(IFB.excelSheetSettlements);

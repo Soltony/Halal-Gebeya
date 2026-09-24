@@ -31,6 +31,8 @@ export type LoanForRepayment = {
   borrowerId: string;
   loanAmount: number;
   repaidAmount: number | null;
+  /** Tax withheld at disbursement; booked to Tax Received but not a repayment. */
+  taxDeducted?: number | null;
   dueDate: Date;
   disbursedDate: Date;
   product: {
@@ -73,6 +75,105 @@ export type ApplyBnplRepaymentResult =
       /** The balance the payment exceeded. */
       due: number;
     };
+
+/** Amount per repayment bucket, as returned by calculateTotalRepayable. */
+export type RepaymentBuckets = {
+  penalty: number;
+  serviceFee: number;
+  interest: number;
+  tax: number;
+  principal: number;
+};
+
+const round4 = (v: number) => Math.round(v * 10000) / 10000;
+
+/**
+ * What a loan has already collected per bucket, assuming every payment was
+ * applied in priority order: penalty -> fee -> interest -> tax -> principal.
+ * Only true for loans that were only ever repaid at loan level.
+ */
+export function replayPaymentPriority(
+  totals: RepaymentBuckets,
+  alreadyRepaid: number
+): RepaymentBuckets {
+  let remaining = alreadyRepaid;
+  const take = (cap: number) => {
+    const paid = Math.min(cap, Math.max(0, remaining));
+    remaining -= cap;
+    return paid;
+  };
+  return {
+    penalty: take(totals.penalty),
+    serviceFee: take(totals.serviceFee),
+    interest: take(totals.interest),
+    tax: take(totals.tax),
+    principal: take(totals.principal),
+  };
+}
+
+/**
+ * What a loan has already collected per bucket, read from its ledger.
+ *
+ * Installment payments book principal and fees side by side, so replaying the
+ * priority order over repaidAmount misattributes them: a loan-level residual
+ * (e.g. a fee share collected after every installment is settled) would be
+ * booked as principal although principal was already fully collected. The
+ * ledger records where each payment actually went.
+ *
+ * Tax withheld at disbursement (loan.taxDeducted) is also booked to Tax
+ * Received but is not a repayment, so it is excluded.
+ *
+ * Falls back to the priority replay when the ledger does not account for
+ * what the loan says was repaid.
+ */
+export async function getCollectedByBucket(
+  db: Pick<Prisma.TransactionClient, "ledgerEntry">,
+  loan: { id: string; repaidAmount: number | null; taxDeducted?: number | null },
+  totals: RepaymentBuckets
+): Promise<RepaymentBuckets> {
+  const alreadyRepaid = loan.repaidAmount || 0;
+  const entries = await db.ledgerEntry.findMany({
+    where: {
+      journalEntry: { loanId: loan.id },
+      ledgerAccount: { type: "Received" },
+    },
+    select: {
+      type: true,
+      amount: true,
+      ledgerAccount: { select: { category: true } },
+    },
+  });
+
+  const received: Record<string, number> = {};
+  for (const e of entries) {
+    const category = e.ledgerAccount.category;
+    received[category] =
+      (received[category] ?? 0) + (e.type === "Debit" ? e.amount : -e.amount);
+  }
+
+  const collected: RepaymentBuckets = {
+    penalty: round4(received.Penalty ?? 0),
+    serviceFee: round4(received.ServiceFee ?? 0),
+    interest: round4(received.Interest ?? 0),
+    tax: round4(Math.max(0, (received.Tax ?? 0) - (loan.taxDeducted || 0))),
+    principal: round4(received.Principal ?? 0),
+  };
+  const ledgerTotal =
+    collected.penalty +
+    collected.serviceFee +
+    collected.interest +
+    collected.tax +
+    collected.principal;
+
+  if (Math.abs(ledgerTotal - alreadyRepaid) > LOAN_SETTLE_EPSILON) {
+    console.warn(
+      "[BNPL_REPAYMENT] ledger does not match repaidAmount; replaying payment priority",
+      { loanId: loan.id, ledgerTotal, alreadyRepaid }
+    );
+    return replayPaymentPriority(totals, alreadyRepaid);
+  }
+  return collected;
+}
 
 /**
  * Applies a confirmed repayment: posts the ledger entries, records the Payment,
@@ -605,33 +706,14 @@ export async function applyBnplRepayment(
   // Apply payment in order: Penalty -> ServiceFee -> Interest -> Principal
   let amountToApply = paymentAmount;
 
-  const alreadyPaidPenalty = Math.min(totals.penalty, alreadyRepaid);
-  const alreadyPaidServiceFee = Math.min(
-    totals.serviceFee,
-    Math.max(0, alreadyRepaid - totals.penalty)
-  );
-  const alreadyPaidInterest = Math.min(
-    totals.interest,
-    Math.max(0, alreadyRepaid - totals.penalty - totals.serviceFee)
-  );
-  const alreadyPaidTax = Math.min(
-    totals.tax,
-    Math.max(
-      0,
-      alreadyRepaid - totals.penalty - totals.serviceFee - totals.interest
-    )
-  );
-  const alreadyPaidPrincipal = Math.min(
-    totals.principal,
-    Math.max(
-      0,
-      alreadyRepaid -
-        totals.penalty -
-        totals.serviceFee -
-        totals.interest -
-        totals.tax
-    )
-  );
+  // Read what each bucket already collected from the ledger rather than
+  // replaying the priority order over repaidAmount (see getCollectedByBucket).
+  const collected = await getCollectedByBucket(tx, loan, totals);
+  const alreadyPaidPenalty = collected.penalty;
+  const alreadyPaidServiceFee = collected.serviceFee;
+  const alreadyPaidInterest = collected.interest;
+  const alreadyPaidTax = collected.tax;
+  const alreadyPaidPrincipal = collected.principal;
 
   const penaltyDue = Math.max(0, totals.penalty - alreadyPaidPenalty);
   const penaltyToPay = Math.min(amountToApply, penaltyDue);

@@ -80,7 +80,8 @@ export const IFB = {
   statusSettled: 'Settled',
   statusActiveOutstanding: 'Active (outstanding)',
   statusPastDue: 'Past due',
-  delinquencyRate: 'Delinquency rate',
+  defaultRate: 'Default rate',
+  facilitiesInDefault: 'In default',
 
   /** Admin dashboard ledger (UI labels only) */
   profitReceivable: 'Daily fee receivable',
@@ -104,7 +105,8 @@ export const IFB = {
   financingStatusDistribution: 'Financing status distribution',
   financingStatusDistributionDesc: 'A breakdown of all facilities by their current status.',
   financingProductsOverview: 'Financing products overview',
-  financingProductsOverviewDesc: 'A summary of all available financing products.',
+  financingProductsOverviewDesc:
+    'Active facilities, facilities in default (past due, not yet settled) and default rate (in default ÷ active) per product.',
   activeFinancingFacilities: 'Active facilities',
 
   /** Settings / product configuration (UI) */

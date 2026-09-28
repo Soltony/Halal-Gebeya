@@ -15,6 +15,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -97,6 +98,9 @@ const DashboardView = ({ data, color }: { data: DashboardData, color: string }) 
     } = data;
     
     const totalIncome = Object.values(income).reduce((sum, val) => sum + val, 0);
+    const totalActive = productOverview.reduce((sum, p) => sum + p.active, 0);
+    const totalDefaulted = productOverview.reduce((sum, p) => sum + p.defaulted, 0);
+    const overallDefaultRate = totalActive > 0 ? (totalDefaulted / totalActive) * 100 : 0;
 
     const loanStatusData = useMemo(() => [
       { name: IFB.statusSettled, value: rawLoanStatusData.find(d => d.name === 'Paid')?.value || 0, color: color },
@@ -284,8 +288,9 @@ const DashboardView = ({ data, color }: { data: DashboardData, color: string }) 
                     <TableRow>
                       <TableHead>Product</TableHead>
                       <TableHead>Provider</TableHead>
-                      <TableHead>{IFB.activeFinancingFacilities}</TableHead>
-                      <TableHead className="text-right">{IFB.delinquencyRate}</TableHead>
+                      <TableHead className="text-right">{IFB.activeFinancingFacilities}</TableHead>
+                      <TableHead className="text-right">{IFB.facilitiesInDefault}</TableHead>
+                      <TableHead className="text-right">{IFB.defaultRate}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -293,11 +298,20 @@ const DashboardView = ({ data, color }: { data: DashboardData, color: string }) 
                         <TableRow key={`${product.provider}-${product.name}`}>
                             <TableCell>{product.name}</TableCell>
                             <TableCell>{product.provider}</TableCell>
-                            <TableCell>{product.active}</TableCell>
+                            <TableCell className="text-right">{product.active}</TableCell>
+                            <TableCell className={`text-right ${product.defaulted > 0 ? 'text-destructive font-medium' : ''}`}>{product.defaulted}</TableCell>
                             <TableCell className="text-right">{product.defaultRate.toFixed(1)}%</TableCell>
                         </TableRow>
                     ))}
                   </TableBody>
+                  <TableFooter>
+                    <TableRow>
+                      <TableCell colSpan={2}>Total</TableCell>
+                      <TableCell className="text-right">{totalActive}</TableCell>
+                      <TableCell className="text-right">{totalDefaulted}</TableCell>
+                      <TableCell className="text-right">{overallDefaultRate.toFixed(1)}%</TableCell>
+                    </TableRow>
+                  </TableFooter>
                 </Table>
               </CardContent>
             </Card>

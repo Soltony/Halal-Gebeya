@@ -11,6 +11,19 @@ const MAX_PAGE_SIZE = 200;
 // (api/loans, api/admin/applications, api/bnpl/orders).
 const DISBURSEMENT_JOURNAL_PREFIXES = ["Loan disbursement for", "BNPL disbursement for"];
 
+// Bank (FT) reference written into the repayment journal description:
+// - portal manual mark-successful (api/approvals): "... via TxRef {txnRef} FT:FT25245ABCDE"
+// - CBS NPL auto-debit (actions/cbs-npl):          "... cbsTxn=FT25245ABCDE)"
+const BANK_REFERENCE_PATTERNS = [/\bFT:(.+)$/, /\bcbsTxn=([^\s)]+)/];
+
+function bankReferenceFromDescription(description: string): string | null {
+  for (const pattern of BANK_REFERENCE_PATTERNS) {
+    const m = description.match(pattern);
+    if (m && m[1].trim()) return m[1].trim();
+  }
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const user = await getUserFromSession();
@@ -423,7 +436,11 @@ export async function GET(request: NextRequest) {
           }
         } catch (e) {}
 
-        let transactionStatus = je.payment ? "COMPLETED" : "POSTED";
+        // A Payment row is only written once the repayment has been applied, so
+        // repayments are always successful. The disbursement match below sets
+        // the status for disbursement rows only — it describes the loan's
+        // disbursement, not a repayment.
+        let transactionStatus = je.payment ? "SUCCESS" : "POSTED";
         let reference = je.id;
 
         // For repayments: resolve the CBS transaction reference (FT number) from PaymentTransaction
@@ -431,10 +448,15 @@ export async function GET(request: NextRequest) {
         // Each partial repayment has its own TxRef in the journal entry description
         if (je.payment && loan?.id) {
           try {
-            // 1) FIRST: Extract TxRef from journal entry description (unique per payment)
-            // The description contains "via TxRef {txnRef}" which is specific to this payment
             const desc = String((je as any).description || "");
-            const m = desc.match(/TxRef\s*[:#]?\s*([A-Za-z0-9-]+)/i);
+
+            // 0) Manual and CBS NPL repayments carry the FT in the description itself.
+            const bankReference = bankReferenceFromDescription(desc);
+            if (bankReference) reference = bankReference;
+
+            // 1) Extract TxRef from journal entry description (unique per payment)
+            // The description contains "via TxRef {txnRef}" which is specific to this payment
+            const m = reference === je.id ? desc.match(/TxRef\s*[:#]?\s*([A-Za-z0-9-]+)/i) : null;
             if (m && m[1]) {
               const foundTxnRef = m[1];
               // Look up PaymentTransaction by txnRef to get the FT number
@@ -443,14 +465,6 @@ export async function GET(request: NextRequest) {
               });
               if (pt && pt.transactionId && /^FT/i.test(pt.transactionId)) {
                 reference = pt.transactionId;
-              }
-            }
-
-            // Also check for inline FT: reference in description (manual mark-successful)
-            if (reference === je.id) {
-              const ftMatch = desc.match(/FT:([A-Za-z0-9]+)/i);
-              if (ftMatch && ftMatch[1]) {
-                reference = ftMatch[1];
               }
             }
 
@@ -594,7 +608,7 @@ export async function GET(request: NextRequest) {
               disbursementStatusText = "Success";
               disbursementOutcome = "Success";
               cbsCreditAmount = match.amount ?? null;
-              transactionStatus = "SUCCESS";
+              if (!je.payment) transactionStatus = "SUCCESS";
             } else if (matchDisbursementStatus === "FAILED" || 
                        (disbursementStatusCode !== null && (disbursementStatusCode < 200 || disbursementStatusCode >= 300))) {
               disbursementStatusText = disbursementStatusCode !== null 
@@ -602,11 +616,11 @@ export async function GET(request: NextRequest) {
                 : "Failed";
               disbursementOutcome = "Failure";
               cbsCreditAmount = 0;
-              transactionStatus = "FAILED";
+              if (!je.payment) transactionStatus = "FAILED";
             } else if (matchDisbursementStatus === "PENDING" || matchDisbursementStatus === "SENT") {
               disbursementStatusText = matchDisbursementStatus;
               disbursementOutcome = "Pending";
-              transactionStatus = "PENDING";
+              if (!je.payment) transactionStatus = "PENDING";
             }
           }
         }
